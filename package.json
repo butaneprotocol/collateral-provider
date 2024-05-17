@@ -9,6 +9,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@blaze-cardano/sdk": "^0.0.9"
+    "@blaze-cardano/sdk": "^0.0.9",
+    "zod": "^3.23.8"
   }
 }
