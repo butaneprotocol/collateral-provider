@@ -1,7 +1,13 @@
 import { HotWallet, Core, Maestro } from '@blaze-cardano/sdk'
 import { TxCBOR } from '@cardano-sdk/core'
 import { serve } from 'bun'
-import type { ResponseGetCollateral, ResponseSignCollateral } from './types'
+import {
+  RequestGetCollateral,
+  RequestSignCollateral,
+  ResponseGetCollateral,
+  type ResponseSignCollateral,
+} from './types'
+import { z } from 'zod'
 
 const NETWORK = Bun.env.NETWORK
 if (!NETWORK) {
@@ -53,6 +59,17 @@ serve({
   async fetch(req) {
     const url = new URL(req.url)
     if (url.pathname === '/getCollateral') {
+      if (req.method != 'GET') {
+        throw new Error(`${req.method} is GET-only`)
+      }
+      const request = await req.json()
+      const zRequest = RequestGetCollateral.safeParse(request)
+      if (!zRequest.success) {
+        throw new Error('/getCollateral could not parse request')
+      }
+      if (zRequest.data.id) {
+        throw new Error('This implementation does not support the ID field!')
+      }
       const response: ResponseGetCollateral = {
         collateral: {
           transaction_id: collateral_utxo.input().transactionId(),
@@ -61,16 +78,32 @@ serve({
       }
       return new Response(JSON.stringify(response))
     } else if (url.pathname === '/signCollateral') {
-      let txCbor = url.searchParams.get('tx')
-      if (!txCbor) {
-        throw new Error('Tx must be provided in sign collateral request!')
+      if (req.method != 'POST') {
+        throw new Error(`${req.method} is POST-only`)
+      }
+      const request = await req.json()
+      const zRequest = RequestSignCollateral.safeParse(request)
+      if (!zRequest.success) {
+        throw new Error('/signCollateral could not parse request')
       }
       let transaction: Core.Transaction
       try {
-        transaction = Core.Transaction.fromCbor(TxCBOR(txCbor)!)
+        transaction = Core.Transaction.fromCbor(TxCBOR(zRequest.data.txCbor)!)
       } catch {
         throw new Error('Failed to parse tx cbor into a transaction!')
       }
+      const additionalUTxOs = zRequest.data.additionalUTxOs.map((x) =>
+        Core.TransactionUnspentOutput.fromCbor(Core.HexBlob(x)),
+      )
+      const additionalInputs = additionalUTxOs.map((x) => x.input())
+      // const inputUTxOs = await provider.resolveUnspentOutputs(
+      //   [...transaction
+      //     .body()
+      //     .inputs()
+      //     .values()]
+      //     //.filter((x) => !additionalInputs.includes(x)),
+      // )
+      // Todo: check each additional utxo and make sure we aren't spending it
 
       /*
             todo: validate the transaction, assert no UTxO and/or other action is authorised which should not be
@@ -78,6 +111,33 @@ serve({
             as the scheme is the wallet should be funded with a single utxo. However the extra checks are harmless
             in-case the wallet is overfunded
         */
+      if (
+        transaction
+          .body()
+          .inputs()
+          .values()
+          .some((x) => x == collateral_utxo.input())
+      ) {
+        throw new Error('May not spend the collateral input!')
+      }
+      // if (inputUTxOs.some((x)=>x.output().address().getProps().paymentPart == wallet.address.getProps().paymentPart)){
+      //   throw new Error('May not spend any inputs owned by the address!')
+      // }
+
+      const originalRedeemers = transaction.witnessSet().redeemers()?.values()
+      if (!originalRedeemers){
+        throw new Error("May not provide collateral for transaction without redeemers!")
+      }
+      const evaluatedRedeemers = (await provider.evaluateTransaction(transaction, additionalUTxOs)).values()
+
+      for (let i = 0; i<evaluatedRedeemers.length; i++){
+        if (evaluatedRedeemers[i].exUnits().mem() < originalRedeemers[i].exUnits().mem()) {
+          throw new Error(`Collateral failure: evalution failed, the ${i}th redeemer was underevaluating memory`)
+        }
+        if (evaluatedRedeemers[i].exUnits().steps() < originalRedeemers[i].exUnits().steps()) {
+          throw new Error(`Collateral failure: evalution failed, the ${i}th redeemer was underevaluating compute`)
+        }
+      }
 
       const transactionWitnesses = await wallet.signTransaction(transaction)
       const response: ResponseSignCollateral = {
