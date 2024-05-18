@@ -60,15 +60,15 @@ serve({
     const url = new URL(req.url)
     if (url.pathname === '/getCollateral') {
       if (req.method != 'GET') {
-        throw new Error(`${req.method} is GET-only`)
+        return new Response(JSON.stringify({ error: `Invalid request method: ${req.method}. Only GET is allowed.` }), { status: 400 })
       }
       const request = await req.json()
       const zRequest = RequestGetCollateral.safeParse(request)
       if (!zRequest.success) {
-        throw new Error('/getCollateral could not parse request')
+        return new Response(JSON.stringify({ error: 'Unable to parse request for /getCollateral.' }), { status: 400 })
       }
       if (zRequest.data.id) {
-        throw new Error('This implementation does not support the ID field!')
+        return new Response(JSON.stringify({ error: 'The ID field is not supported in this implementation.' }), { status: 400 })
       }
       const response: ResponseGetCollateral = {
         collateral: {
@@ -79,18 +79,18 @@ serve({
       return new Response(JSON.stringify(response))
     } else if (url.pathname === '/signCollateral') {
       if (req.method != 'POST') {
-        throw new Error(`${req.method} is POST-only`)
+        return new Response(JSON.stringify({ error: `Invalid request method: ${req.method}. Only POST is allowed.` }), { status: 400 })
       }
       const request = await req.json()
       const zRequest = RequestSignCollateral.safeParse(request)
       if (!zRequest.success) {
-        throw new Error('/signCollateral could not parse request')
+        return new Response(JSON.stringify({ error: 'Unable to parse request for /signCollateral.' }), { status: 400 })
       }
       let transaction: Core.Transaction
       try {
         transaction = Core.Transaction.fromCbor(TxCBOR(zRequest.data.txCbor)!)
       } catch {
-        throw new Error('Failed to parse tx cbor into a transaction!')
+        return new Response(JSON.stringify({ error: 'Failed to parse transaction CBOR.' }), { status: 400 })
       }
       const additionalUTxOs = zRequest.data.additionalUTxOs.map((x) =>
         Core.TransactionUnspentOutput.fromCbor(Core.HexBlob(x)),
@@ -118,24 +118,24 @@ serve({
           .values()
           .some((x) => x == collateral_utxo.input())
       ) {
-        throw new Error('May not spend the collateral input!')
+        return new Response(JSON.stringify({ error: 'Collateral input cannot be spent.' }), { status: 400 })
       }
       // if (inputUTxOs.some((x)=>x.output().address().getProps().paymentPart == wallet.address.getProps().paymentPart)){
-      //   throw new Error('May not spend any inputs owned by the address!')
+      //   return new Response(JSON.stringify({ error: 'Inputs owned by the address cannot be spent.' }), { status: 400 })
       // }
 
       const originalRedeemers = transaction.witnessSet().redeemers()?.values()
       if (!originalRedeemers){
-        throw new Error("May not provide collateral for transaction without redeemers!")
+        return new Response(JSON.stringify({ error: "Transaction must include redeemers to provide collateral." }), { status: 400 })
       }
       const evaluatedRedeemers = (await provider.evaluateTransaction(transaction, additionalUTxOs)).values()
 
       for (let i = 0; i<evaluatedRedeemers.length; i++){
         if (evaluatedRedeemers[i].exUnits().mem() < originalRedeemers[i].exUnits().mem()) {
-          throw new Error(`Collateral failure: evalution failed, the ${i}th redeemer was underevaluating memory`)
+          return new Response(JSON.stringify({ error: `Collateral evaluation failed: the ${i}th redeemer under-evaluated memory.` }), { status: 400 })
         }
         if (evaluatedRedeemers[i].exUnits().steps() < originalRedeemers[i].exUnits().steps()) {
-          throw new Error(`Collateral failure: evalution failed, the ${i}th redeemer was underevaluating compute`)
+          return new Response(JSON.stringify({ error: `Collateral evaluation failed: the ${i}th redeemer under-evaluated compute steps.` }), { status: 400 })
         }
       }
 
@@ -145,9 +145,10 @@ serve({
       }
       return new Response(JSON.stringify(response))
     }
-    return new Response('Invalid path')
+    return new Response(JSON.stringify({ error: 'Invalid path.' }), { status: 400 })
   },
   port: 80,
 })
 
 console.log('Server is running on http://localhost:80')
+
